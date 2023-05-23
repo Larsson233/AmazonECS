@@ -1,0 +1,109 @@
+---
+AWSTemplateFormatVersion : "2010-09-09"
+
+Description: >
+  My
+  first
+  template.
+
+Resources:
+  MyECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: MyECSCluster
+
+  MySecGrp:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: "MySecGrp"
+      GroupDescription: "Load balancer Sec Grp"
+      SecurityGroupIngress:
+        - IpProtocol: "tcp"
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      
+  ECSTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      ContainerDefinitions:
+        - Name: nginx-container
+          Image: larsson233/mywebapp
+          PortMappings:
+            - ContainerPort: 80
+              HostPort: 80
+              Protocol: tcp
+          Memory: 128
+          Cpu: 128
+      Family: nginx-family
+      Cpu: 256
+      Memory: 512
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+        - EC2
+  
+  ECSService:
+    Type: AWS::ECS::Service
+    DependsOn:
+    - MyListener
+    - MyTargetGroup
+    Properties:
+      Cluster: !Ref MyECSCluster
+      DesiredCount: 2
+      LaunchType: FARGATE
+      ServiceName: ECSService
+      TaskDefinition: !Ref ECSTaskDefinition
+      LoadBalancers:
+        - ContainerName: nginx-container
+          ContainerPort: 80
+          TargetGroupArn: !Ref MyTargetGroup
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          SecurityGroups:
+            - !GetAtt MySecGrp.GroupId
+          Subnets:
+            - subnet-0eb075e9f84c19e8d
+            - subnet-0373ffc28a383518f
+            - subnet-03bfaf7e959364fbf
+
+  MyTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckIntervalSeconds: 30
+      HealthCheckPath: /
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      Matcher:
+        HttpCode: 200
+      Name: MyTargetGroup
+      TargetType: ip
+      Port: 80
+      Protocol: HTTP
+      UnhealthyThresholdCount: 2
+      VpcId: vpc-0e0102b7d2a6442bb
+
+  MyListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref MyLoadBalancer
+      Protocol: HTTP
+      Port: 80
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref MyTargetGroup
+  
+  MyLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties: 
+      IpAddressType: ipv4
+      Name: "MyLB"
+      Scheme: internet-facing
+      SecurityGroups: 
+        - !GetAtt MySecGrp.GroupId
+      SubnetMappings: 
+        - SubnetId: subnet-0eb075e9f84c19e8d
+        - SubnetId: subnet-0373ffc28a383518f
+        - SubnetId: subnet-03bfaf7e959364fbf

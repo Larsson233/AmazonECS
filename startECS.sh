@@ -1,0 +1,1 @@
+aws cloudformation create-stack --stack-name myECS --template-body file://myECS.yml
