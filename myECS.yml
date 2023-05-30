@@ -8,6 +8,10 @@ Description: >
 
 Resources:
   MyECSCluster:
+    DependsOn:
+      - MyTargetGroup
+      - MyLoadBalancer
+      - MyListener
     Type: AWS::ECS::Cluster
     Properties:
       ClusterName: MyECSCluster
@@ -27,21 +31,22 @@ Resources:
     Type: AWS::ECS::TaskDefinition
     Properties:
       ContainerDefinitions:
-        - Name: nginx-container
-          Image: larsson233/mywebapp
+        - Name: oggescontainer
+          Image: nginx
           PortMappings:
             - ContainerPort: 80
               HostPort: 80
               Protocol: tcp
           Memory: 128
           Cpu: 128
-      Family: nginx-family
+      Family: MyTaskDefinition
       Cpu: 256
       Memory: 512
       NetworkMode: awsvpc
       RequiresCompatibilities:
         - FARGATE
         - EC2
+      ExecutionRoleArn: arn:aws:iam::338315907544:role/ecsTaskExecutionRole
   
   ECSService:
     Type: AWS::ECS::Service
@@ -55,7 +60,7 @@ Resources:
       ServiceName: ECSService
       TaskDefinition: !Ref ECSTaskDefinition
       LoadBalancers:
-        - ContainerName: nginx-container
+        - ContainerName: oggescontainer
           ContainerPort: 80
           TargetGroupArn: !Ref MyTargetGroup
       NetworkConfiguration:
@@ -64,9 +69,9 @@ Resources:
           SecurityGroups:
             - !GetAtt MySecGrp.GroupId
           Subnets:
-            - subnet-0eb075e9f84c19e8d
-            - subnet-0373ffc28a383518f
-            - subnet-03bfaf7e959364fbf
+            - subnet-038809d3d73720fb5
+            - subnet-0b5058e004fd8e2bb
+            - subnet-06b09862b947ee15c
 
   MyTargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
@@ -83,7 +88,7 @@ Resources:
       Port: 80
       Protocol: HTTP
       UnhealthyThresholdCount: 2
-      VpcId: vpc-0e0102b7d2a6442bb
+      VpcId: vpc-0fc88ebe86ed9b792
 
   MyListener:
     Type: AWS::ElasticLoadBalancingV2::Listener
@@ -104,6 +109,314 @@ Resources:
       SecurityGroups: 
         - !GetAtt MySecGrp.GroupId
       SubnetMappings: 
-        - SubnetId: subnet-0eb075e9f84c19e8d
-        - SubnetId: subnet-0373ffc28a383518f
-        - SubnetId: subnet-03bfaf7e959364fbf
+        - SubnetId: subnet-038809d3d73720fb5
+        - SubnetId: subnet-0b5058e004fd8e2bb
+        - SubnetId: subnet-06b09862b947ee15c
+
+  MyPipeLine: #Deploy with amazon ECS
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name: CloudFormationPipeLine
+      ArtifactStore:
+        Location: codepipeline-eu-north-1-700534044739
+        Type: S3
+      RoleArn: !GetAtt PipeLineServiceRole.Arn
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: SourceAction
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Version: 1
+                Provider: CodeCommit
+              OutputArtifacts:
+                - Name: SourceOutput
+              Configuration:
+                RepositoryName: stockholmogge
+                BranchName: master
+              RunOrder: 1
+        - Name: Build
+          Actions:
+            - Name: BuildAction
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: 1
+                Provider: CodeBuild
+              InputArtifacts:
+                - Name: SourceOutput
+              OutputArtifacts:
+                - Name: BuildOutput
+              Configuration:
+                ProjectName: !Ref CodeBuildProject
+              RunOrder: 1
+        - Name: Deploy
+          Actions:
+            - Name: DeployAction
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Version: 1
+                Provider: ECS
+              InputArtifacts:
+                - Name: BuildOutput
+              Configuration:
+                ClusterName: !Ref MyECSCluster
+                ServiceName: !Ref ECSService
+                FileName: imagedefinitions.json
+              RunOrder: 1
+    
+  CodeBuildProject:
+    DependsOn:
+      - BuildProjectServiceRole
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: CloudFormationBuildProject
+      ServiceRole: !Ref BuildProjectServiceRole
+      Artifacts:
+        Type: NO_ARTIFACTS
+      Environment:
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/standard:7.0
+        Type: LINUX_CONTAINER
+        PrivilegedMode: true
+      Source:
+        Type: CODECOMMIT
+        Location: https://git-codecommit.eu-north-1.amazonaws.com/v1/repos/stockholmogge
+      TimeoutInMinutes: 60
+      SourceVersion: master
+      LogsConfig:
+        CloudWatchLogs:
+          Status: ENABLED
+
+  BuildProjectServiceRole: 
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: CloudFormationBuildProjectServiceRole
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - codebuild.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: /
+      Policies:
+        - PolicyName: Codebuild-CloudFormation
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - iam:PassRole
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - ecs:DescribeServices
+                  - ecs:DescribeTaskDefinition
+                  - ecs:DescribeTasks
+                  - ecs:ListTasks
+                  - ecs:RegisterTaskDefinition
+                  - ecs:UpdateService
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - ecr:DescribeImages
+                  - ecr:DescribeRepositories
+                  - ecr:ListImages
+                  - ecr:BatchGetImage
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - codebuild:BatchGetBuilds
+                  - codebuild:StartBuild
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - codecommit:CancelUploadArchive
+                  - codecommit:GetBranch
+                  - codecommit:GetCommit
+                  - codecommit:GetUploadArchiveStatus
+                  - codecommit:UploadArchive
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - cloudformation:DescribeStackResource
+                  - cloudformation:DescribeStacks
+                  - cloudformation:GetTemplate
+                  - cloudformation:ValidateTemplate
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:GetRepositoryPolicy
+                  - ecr:DescribeRepositories
+                  - ecr:ListImages
+                  - ecr:DescribeImages
+                  - ecr:BatchGetImage
+                  - ecr:GetLifecyclePolicy
+                  - ecr:GetLifecyclePolicyPreview
+                  - ecr:ListTagsForResource
+                  - ecr:DescribeImageScanFindings
+                  - ecr:InitiateLayerUpload
+                  - ecr:UploadLayerPart
+                  - ecr:CompleteLayerUpload
+                  - ecr:PutImage
+                Resource: "*"
+              - Effect: Allow
+                Resource:
+                  - "arn:aws:logs:eu-north-1:338315907544:log-group:/aws/codebuild/CloudFormationBuildProject"
+                  - "arn:aws:logs:eu-north-1:338315907544:log-group:/aws/codebuild/CloudFormationBuildProject:*"
+                Action:
+                  - "logs:CreateLogGroup"
+                  - "logs:CreateLogStream"
+                  - "logs:PutLogEvents"
+              - Effect: Allow
+                Resource:
+                  - "arn:aws:s3:::codepipeline-eu-north-1-*"
+                Action:
+                  - "s3:PutObject"
+                  - "s3:GetObject"
+                  - "s3:GetObjectVersion"
+                  - "s3:GetBucketAcl"
+                  - "s3:GetBucketLocation"
+              - Effect: Allow
+                Resource:
+                  - "arn:aws:codecommit:eu-north-1:338315907544:stockholmogge"
+                Action:
+                  - "codecommit:GitPull"
+              - Effect: Allow
+                Action:
+                  - "codebuild:CreateReportGroup"
+                  - "codebuild:CreateReport"
+                  - "codebuild:UpdateReport"
+                  - "codebuild:BatchPutTestCases"
+                  - "codebuild:BatchPutCodeCoverages"
+                Resource:
+                  - "arn:aws:codebuild:eu-north-1:338315907544:report-group/CloudFormationBuildProject-*"
+
+  PipeLineServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: CloudFormationPipeLineServiceRole
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - codepipeline.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: /
+      Policies:
+        - PolicyName: CodePipeline-CloudFormation
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Action:
+                  - "iam:PassRole"
+                Resource: "*"
+                Effect: Allow
+                Condition:
+                  StringEqualsIfExists:
+                    "iam:PassedToService":
+                      - "cloudformation.amazonaws.com"
+                      - "elasticbeanstalk.amazonaws.com"
+                      - "ec2.amazonaws.com"
+                      - "ecs-tasks.amazonaws.com"
+              - Action:
+                  - "codecommit:CancelUploadArchive"
+                  - "codecommit:GetBranch"
+                  - "codecommit:GetCommit"
+                  - "codecommit:GetRepository"
+                  - "codecommit:GetUploadArchiveStatus"
+                  - "codecommit:UploadArchive"
+                Resource: "*"
+                Effect: Allow
+              - Action:
+                  - "codedeploy:CreateDeployment"
+                  - "codedeploy:GetApplication"
+                  - "codedeploy:GetApplicationRevision"
+                  - "codedeploy:GetDeployment"
+                  - "codedeploy:GetDeploymentConfig"
+                  - "codedeploy:RegisterApplicationRevision"
+                Resource: "*"
+                Effect: Allow
+              - Action:
+                  - "codestar-connections:UseConnection"
+                Resource: "*"
+                Effect: Allow
+              - Action:
+                  - "elasticbeanstalk:*"
+                  - "ec2:*"
+                  - "elasticloadbalancing:*"
+                  - "autoscaling:*"
+                  - "cloudwatch:*"
+                  - "s3:*"
+                  - "sns:*"
+                  - "cloudformation:*"
+                  - "rds:*"
+                  - "sqs:*"
+                  - "ecs:*"
+                Resource: "*"
+                Effect: Allow
+              - Action:
+                  - "lambda:InvokeFunction"
+                  - "lambda:ListFunctions"
+                Resource: "*"
+                Effect: Allow
+              - Action:
+                  - "opsworks:CreateDeployment"
+                  - "opsworks:DescribeApps"
+                  - "opsworks:DescribeCommands"
+                  - "opsworks:DescribeDeployments"
+                  - "opsworks:DescribeInstances"
+                  - "opsworks:DescribeStacks"
+                  - "opsworks:UpdateApp"
+                  - "opsworks:UpdateStack"
+                Resource: "*"
+                Effect: Allow
+              - Action:
+                  - "cloudformation:CreateStack"
+                  - "cloudformation:DeleteStack"
+                  - "cloudformation:DescribeStacks"
+                  - "cloudformation:UpdateStack"
+                  - "cloudformation:CreateChangeSet"
+                  - "cloudformation:DeleteChangeSet"
+                  - "cloudformation:DescribeChangeSet"
+                  - "cloudformation:ExecuteChangeSet"
+                  - "cloudformation:SetStackPolicy"
+                  - "cloudformation:ValidateTemplate"
+                Resource: "*"
+                Effect: Allow
+              - Action:
+                  - "codebuild:BatchGetBuilds"
+                  - "codebuild:StartBuild"
+                  - "codebuild:BatchGetBuildBatches"
+                  - "codebuild:StartBuildBatch"
+                Resource: "*"
+                Effect: Allow
+              - Effect: Allow
+                Action:
+                  - "devicefarm:ListProjects"
+                  - "devicefarm:ListDevicePools"
+                  - "devicefarm:GetRun"
+                  - "devicefarm:GetUpload"
+                  - "devicefarm:CreateUpload"
+                  - "devicefarm:ScheduleRun"
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - "servicecatalog:ListProvisioningArtifacts"
+                  - "servicecatalog:CreateProvisioningArtifact"
+                  - "servicecatalog:DescribeProvisioningArtifact"
+                  - "servicecatalog:DeleteProvisioningArtifact"
+                  - "servicecatalog:UpdateProduct"
+                Resource: "*"
+            

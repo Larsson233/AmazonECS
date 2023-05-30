@@ -1,1 +1,1 @@
-aws cloudformation create-stack --stack-name myECS --template-body file://myECS.yml
+aws cloudformation create-stack --stack-name myECS --template-body file://myECS.yml --capabilities CAPABILITY_NAMED_IAM
